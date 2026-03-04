@@ -529,7 +529,8 @@ const MerchantDashboardPage = ({ activeTab }: MerchantDashboardPageProps) => {
         </div>
         <div className="flex gap-4">
           <button
-            onClick={() => window.open('http://localhost:5000/pay', '_blank', 'noopener,noreferrer')}
+            onClick={() => window.open(`${(import.meta as any).env.VITE_API_URL || window.location.origin}/pay`, '_blank', 'noopener,noreferrer')}
+
             className="bg-emerald-600 text-white px-8 py-4 rounded-2xl font-bold shadow-xl flex items-center gap-2 hover:bg-emerald-700 transition-all"
           >
             <Plus size={20} /> New Payment
