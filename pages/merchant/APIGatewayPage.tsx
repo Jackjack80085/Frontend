@@ -153,8 +153,10 @@ const APIGatewayPage = () => {
   }
 
   const integrationCode = `const API_KEY = "${credentials.apiKey}";
+  
 const API_SECRET = "YOUR_API_SECRET";
-const BASE_URL = "http://localhost:5000";
+const BASE_URL = (import.meta as any).env.VITE_API_URL || window.location.origin;
+
 
 function generateSignature(timestampSec, method, path, bodyString) {
   const message = timestampSec + method + path + bodyString;
