@@ -1,736 +1,453 @@
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, Component } from 'react';
 import { createRoot } from 'react-dom/client';
-import { 
-  LayoutDashboard, 
-  Settings, 
-  ShieldCheck, 
-  Clock, 
-  XCircle, 
-  Search, 
-  Bell, 
-  Activity, 
+import {
+  LayoutDashboard,
+  Settings,
+  ShieldCheck,
+  XCircle,
+  Search,
+  Bell,
+  Activity,
   RefreshCw,
   Key,
   Lock,
   History,
   Mail,
   ArrowRight,
-  TrendingUp,
-  Calendar,
-  Users,
   Store,
-  MoreVertical,
   Check,
   CheckCircle2,
   LogOut,
   User,
   DollarSign,
   AlertCircle,
-  PauseCircle,
   Download,
   Upload,
-  FileText,
-  Terminal,
-  Server,
-  Plus,
-  Cpu,
   ShieldAlert,
-  Zap,
   Globe,
   Copy,
   Eye,
-  EyeOff,
-  Code2
+  EyeOff
 } from 'lucide-react';
+
+// API imports
+import { adminLogin, partnerLogin, healthCheck } from './api/auth';
+import { verifyInviteToken, completeRegistration } from './api/onboarding';
+import { storage } from './utils/storage';
+import { invitePartner } from './api/partner';
+import MerchantDashboardPage from './pages/merchant/DashboardPage';
+import AdminDashboardPage from './pages/admin/DashboardPage';
 
 // --- Types & Constants ---
 
 type Role = 'Merchant' | 'Admin';
-type TransactionStatus = 'INITIATED' | 'PENDING' | 'SUCCESS' | 'FAILED' | 'REVERSED';
-type TransactionType = 'PAYIN' | 'PAYOUT';
-type TimePeriod = 'DAYS' | 'MONTHS' | 'YEARS';
 
-interface Transaction {
-  id: string;
-  merchantId: string;
-  merchantName: string;
-  userId: string;
-  amount: number;
-  currency: string;
-  status: TransactionStatus;
-  type: TransactionType;
-  timestamp: string;
-  category: string;
-  bankRef: string;
+
+// --- Invite Partner Modal ---
+interface InvitePartnerModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
 }
 
-interface Merchant {
-  id: string;
-  name: string;
-  category: string;
-  volume: string;
-}
+const InvitePartnerModal = ({ isOpen, onClose, onSuccess }: InvitePartnerModalProps) => {
+  const [formData, setFormData] = useState({ businessName: '', email: '', phone: '', businessType: '' });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
+  const [inviteLink, setInviteLink] = useState('');
+  const [showSuccess, setShowSuccess] = useState(false);
 
-const STATUS_CONFIG: Record<TransactionStatus, { color: string; bg: string; border: string }> = {
-  SUCCESS: { color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200' },
-  PENDING: { color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-200' },
-  FAILED: { color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-200' },
-  INITIATED: { color: 'text-slate-600', bg: 'bg-slate-50', border: 'border-slate-200' },
-  REVERSED: { color: 'text-violet-600', bg: 'bg-violet-50', border: 'border-violet-200' },
-};
-
-// --- Mock Data Store ---
-
-const INITIAL_MERCHANTS: Merchant[] = [
-  { id: 'M-ACME', name: 'Acme Corp', category: 'Hardware', volume: '₹1.2M' },
-  { id: 'M-TECH', name: 'TechCloud', category: 'SaaS', volume: '₹840K' },
-  { id: 'M-STAR', name: 'Starbucks', category: 'Dining', volume: '₹2.1M' },
-  { id: 'M-APPLE', name: 'Apple Online', category: 'Electronics', volume: '₹45M' },
-];
-
-const ALL_TRANSACTIONS: Transaction[] = [
-  { id: 'TX-1001', merchantId: 'M-ACME', merchantName: 'Acme Corp', userId: 'U-JOHN', amount: 1299.00, currency: 'INR', status: 'SUCCESS', type: 'PAYIN', timestamp: '2023-10-24 14:20', category: 'Hardware', bankRef: 'HDFC-49210' },
-  { id: 'TX-1002', merchantId: 'M-ACME', merchantName: 'Acme Corp', userId: 'U-SARA', amount: 450.00, currency: 'INR', status: 'FAILED', type: 'PAYOUT', timestamp: '2023-10-24 12:15', category: 'Settlement', bankRef: 'ICICI-00219' },
-  { id: 'TX-2001', merchantId: 'M-TECH', merchantName: 'TechCloud', userId: 'U-JOHN', amount: 599.99, currency: 'INR', status: 'SUCCESS', type: 'PAYIN', timestamp: '2023-10-24 10:00', category: 'Subscription', bankRef: 'AXIS-9821' },
-  { id: 'TX-2002', merchantId: 'M-TECH', merchantName: 'TechCloud', userId: 'U-SARA', amount: 12000.00, currency: 'INR', status: 'PENDING', type: 'PAYIN', timestamp: '2023-10-23 18:45', category: 'Enterprise', bankRef: 'NEFT-8812' },
-  { id: 'TX-3001', merchantId: 'M-STAR', merchantName: 'Starbucks', userId: 'U-JOHN', amount: 575.00, currency: 'INR', status: 'SUCCESS', type: 'PAYIN', timestamp: '2023-10-23 09:30', category: 'Dining', bankRef: 'VISA-4242' },
-  { id: 'TX-3002', merchantId: 'M-STAR', merchantName: 'Starbucks', userId: 'U-JOHN', amount: 850.00, currency: 'INR', status: 'REVERSED', type: 'PAYOUT', timestamp: '2023-10-22 16:10', category: 'Refund', bankRef: 'UPI-4242' },
-  { id: 'TX-4001', merchantId: 'M-APPLE', merchantName: 'Apple Online', userId: 'U-TECH', amount: 50000.00, currency: 'INR', status: 'INITIATED', type: 'PAYOUT', timestamp: '2023-10-24 15:00', category: 'Settlement', bankRef: 'IMPS-001' },
-];
-
-// --- Shared Components ---
-
-const StatusBadge = ({ status }: { status: TransactionStatus }) => (
-  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-tight uppercase border ${STATUS_CONFIG[status].bg} ${STATUS_CONFIG[status].color} ${STATUS_CONFIG[status].border}`}>
-    <span className={`w-1 h-1 rounded-full ${status === 'PENDING' ? 'animate-pulse' : ''} bg-current`}></span>
-    {status}
-  </span>
-);
-
-const Card = ({ title, children, className = "", subtitle, headerAction }: { title?: string, children?: React.ReactNode, className?: string, subtitle?: string, headerAction?: React.ReactNode }) => (
-  <div className={`bg-white border border-slate-200 rounded-2xl overflow-hidden hover:shadow-xl hover:shadow-slate-200/50 hover:-translate-y-1 transition-all duration-300 ${className}`}>
-    {title && (
-      <div className="px-6 py-4 border-b border-slate-50 flex justify-between items-center">
-        <div>
-          <h3 className="text-sm font-bold text-slate-900">{title}</h3>
-          {subtitle && <p className="text-[10px] text-slate-400 font-medium">{subtitle}</p>}
-        </div>
-        <div className="flex items-center gap-2">
-           {headerAction}
-           <button className="text-slate-300 hover:text-slate-600 transition-colors"><MoreVertical size={16} /></button>
-        </div>
-      </div>
-    )}
-    <div className="p-6">{children}</div>
-  </div>
-);
-
-const OverviewCard = ({ title, subtitle, label, value, icon: Icon, colorClass, iconBgClass, isLight = false }: { title?: string, subtitle?: string, label: string, value: string, icon: any, colorClass: string, iconBgClass: string, isLight?: boolean }) => {
-  const textColor = isLight ? 'text-slate-900' : 'text-white';
-  const subTextColor = isLight ? 'text-slate-400' : 'text-white/40';
-  const dividerColor = isLight ? 'bg-slate-100' : 'bg-white/10';
-  const moreColor = isLight ? 'text-slate-300 hover:text-slate-600' : 'text-white/30 hover:text-white';
-  const iconColor = isLight ? 'text-slate-600' : 'text-white';
-
-  return (
-    <div className={`${colorClass} rounded-[1.5rem] overflow-hidden shadow-xl transition-all hover:scale-[1.01] duration-300 flex flex-col border ${isLight ? 'border-slate-100' : 'border-transparent'}`}>
-      <div className="px-7 py-4 flex justify-between items-start">
-        <div className="min-h-[2rem]">
-          {title && <h4 className={`${textColor} font-bold text-lg tracking-tight leading-tight`}>{title}</h4>}
-          {subtitle && <p className={`${subTextColor} text-[11px] font-medium mt-0.5`}>{subtitle}</p>}
-        </div>
-        <button className={`${moreColor} mt-1`} aria-label="More Options"><MoreVertical size={18} /></button>
-      </div>
-      <div className={`h-px ${dividerColor} w-full`}></div>
-      <div className="px-7 py-8 flex justify-between items-end">
-        <div>
-          <p className={`${subTextColor} text-[9px] font-black uppercase tracking-[0.2em] mb-2`}>{label}</p>
-          <p className={`${textColor} text-5xl font-bold tracking-tighter tabular-nums leading-none`}>{value}</p>
-        </div>
-        <div className={`${iconBgClass} p-4 rounded-2xl flex items-center justify-center shadow-inner`}>
-          <Icon size={28} className={iconColor} />
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const PieChart = ({ data }: { data: { label: string; value: number; color: string }[] }) => {
-  const total = data.reduce((acc, item) => acc + item.value, 0);
-  let cumulativePercent = 0;
-
-  function getCoordinatesForPercent(percent: number) {
-    const x = Math.cos(2 * Math.PI * percent);
-    const y = Math.sin(2 * Math.PI * percent);
-    return [x, y];
-  }
-
-  return (
-    <div className="flex items-center justify-center gap-10 py-4">
-      <div className="relative w-48 h-48">
-        <svg viewBox="-1 -1 2 2" className="w-full h-full -rotate-90">
-          {data.map((item, index) => {
-            const [startX, startY] = getCoordinatesForPercent(cumulativePercent);
-            cumulativePercent += item.value / total;
-            const [endX, endY] = getCoordinatesForPercent(cumulativePercent);
-            const largeArcFlag = item.value / total > 0.5 ? 1 : 0;
-            const pathData = [
-              `M ${startX} ${startY}`,
-              `A 1 1 0 ${largeArcFlag} 1 ${endX} ${endY}`,
-              `L 0 0`,
-            ].join(' ');
-            return <path key={index} d={pathData} fill={item.color} className="hover:opacity-80 transition-opacity cursor-pointer" />;
-          })}
-          <circle cx="0" cy="0" r="0.6" fill="white" />
-        </svg>
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Growth</p>
-           <p className="text-xl font-bold text-slate-900">+12%</p>
-        </div>
-      </div>
-      <div className="space-y-4">
-        {data.map((item, index) => (
-          <div key={index} className="flex items-center gap-3">
-            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }}></div>
-            <div className="text-left">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">{item.label}</p>
-              <p className="text-sm font-bold text-slate-900 tabular-nums">{((item.value / total) * 100).toFixed(0)}%</p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-const PaymentStats = ({ payin, payout, processing, pending }: { payin: number, payout: number, processing: number, pending: number }) => (
-  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
-    <div className="bg-white border border-slate-200 p-6 rounded-2xl flex items-center gap-5 hover:shadow-lg transition-all">
-      <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center">
-        <Download size={24} />
-      </div>
-      <div>
-        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Payin</p>
-        <p className="text-xl font-bold text-slate-900 tabular-nums">₹{payin.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
-      </div>
-    </div>
-    <div className="bg-white border border-slate-200 p-6 rounded-2xl flex items-center gap-5 hover:shadow-lg transition-all">
-      <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center">
-        <Upload size={24} />
-      </div>
-      <div>
-        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Payout</p>
-        <p className="text-xl font-bold text-slate-900 tabular-nums">₹{payout.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
-      </div>
-    </div>
-    <div className="bg-white border border-slate-200 p-6 rounded-2xl flex items-center gap-5 hover:shadow-lg transition-all">
-      <div className="w-12 h-12 bg-slate-50 text-slate-600 rounded-xl flex items-center justify-center">
-        <RefreshCw size={24} />
-      </div>
-      <div>
-        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Processing</p>
-        <p className="text-xl font-bold text-slate-900 tabular-nums">{processing}</p>
-      </div>
-    </div>
-    <div className="bg-white border border-slate-200 p-6 rounded-2xl flex items-center gap-5 hover:shadow-lg transition-all">
-      <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center">
-        <PauseCircle size={24} />
-      </div>
-      <div>
-        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Pending</p>
-        <p className="text-xl font-bold text-slate-900 tabular-nums">{pending}</p>
-      </div>
-    </div>
-  </div>
-);
-
-// --- API Generation View ---
-
-const APIGenerationView = () => {
-  const [isSecretVisible, setIsSecretVisible] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
-
-  const handleCopy = (text: string, field: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(null), 2000);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.businessName || !formData.email) {
+      setError('Business name and email are required');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      const response = await invitePartner(formData as any);
+      if (response.success && response.data) {
+        setInviteLink(response.data.inviteLink);
+        setShowSuccess(true);
+        setTimeout(() => {
+          setFormData({ businessName: '', email: '', phone: '', businessType: '' });
+          setShowSuccess(false);
+          setInviteLink('');
+          onSuccess();
+          onClose();
+        }, 2000);
+      } else {
+        setError(response.message || 'Failed to send invitation');
+      }
+    } catch (err: any) {
+      setError(err?.response?.data?._clientMessage || err?.response?.data?.message || 'Failed to send invitation');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleGenerate = () => {
-    setIsGenerating(true);
-    setTimeout(() => {
-      setIsGenerating(false);
-      alert('A new pair of API keys has been generated successfully.');
-    }, 1500);
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(inviteLink);
+    alert('Invite link copied to clipboard!');
   };
-
-  const codeSnippet = `const nexus = require('@nexuspay/sdk');
-
-const client = new nexus.Client({
-  publicKey: 'pk_live_51M0x2bX9kL8zPq...',
-  secretKey: 'sk_live_v9X2c7...'
-});
-
-// Initiate a secure payment
-const session = await client.checkout.sessions.create({
-  amount: 250000, // In paise
-  currency: 'inr',
-  success_url: 'https://acme.com/success',
-  cancel_url: 'https://acme.com/cancel',
-});`;
-
-  return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 space-y-8">
-          <Card title="API Infrastructure" subtitle="Secure credentials for server-side integration">
-            <div className="space-y-8">
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Live Public Key</label>
-                  <div className="relative group">
-                    <input 
-                      readOnly 
-                      value="pk_live_51M0x2bX9kL8zPq9102X92jL0" 
-                      className="w-full pl-6 pr-12 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-mono text-xs font-bold text-slate-700 focus:outline-none" 
-                    />
-                    <button 
-                      onClick={() => handleCopy('pk_live_51M0x2bX9kL8zPq9102X92jL0', 'public')}
-                      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-emerald-600 transition-colors"
-                    >
-                      {copiedField === 'public' ? <Check size={18} className="text-emerald-500" /> : <Copy size={18} />}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Live Secret Key</label>
-                  <div className="relative group">
-                    <input 
-                      readOnly 
-                      type={isSecretVisible ? 'text' : 'password'}
-                      value="sk_live_v9X2c7k01L2zQp11M9jX02..." 
-                      className="w-full pl-6 pr-24 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-mono text-xs font-bold text-slate-700 focus:outline-none" 
-                    />
-                    <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-3">
-                      <button 
-                        onClick={() => setIsSecretVisible(!isSecretVisible)}
-                        className="text-slate-300 hover:text-slate-600 transition-colors"
-                      >
-                        {isSecretVisible ? <EyeOff size={18} /> : <Eye size={18} />}
-                      </button>
-                      <button 
-                        onClick={() => handleCopy('sk_live_v9X2c7k01L2zQp11M9jX02...', 'secret')}
-                        className="text-slate-300 hover:text-emerald-600 transition-colors"
-                      >
-                        {copiedField === 'secret' ? <Check size={18} className="text-emerald-500" /> : <Copy size={18} />}
-                      </button>
-                    </div>
-                  </div>
-                  <p className="mt-3 text-[10px] text-slate-400 font-medium italic">* Do not share your secret key in public environments.</p>
-                </div>
-              </div>
-
-              <div className="h-px bg-slate-100 w-full"></div>
-
-              <div className="flex justify-between items-center bg-amber-50/50 p-6 rounded-2xl border border-amber-100">
-                <div className="flex gap-4">
-                  <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-amber-500 shadow-sm">
-                    <RefreshCw size={20} />
-                  </div>
-                  <div>
-                    <h5 className="text-sm font-bold text-slate-900">Key Rotation Protocol</h5>
-                    <p className="text-[11px] text-slate-500 font-medium">Generate a new pair to invalidate existing ones immediately.</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={handleGenerate} 
-                  disabled={isGenerating}
-                  className="px-6 py-3 bg-[#0A0D14] text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-all flex items-center gap-2"
-                >
-                  {isGenerating ? <RefreshCw className="animate-spin" size={14} /> : 'Generate New Credentials'}
-                </button>
-              </div>
-            </div>
-          </Card>
-
-          <Card title="Webhook Orchestration" subtitle="Receive real-time event notifications">
-            <div className="space-y-6">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Endpoint URL</label>
-                <div className="flex gap-4">
-                  <input 
-                    placeholder="https://api.acme.com/v1/webhooks" 
-                    className="flex-1 px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-semibold text-xs text-slate-700 focus:outline-none focus:border-emerald-500 transition-all" 
-                  />
-                  <button className="px-6 py-4 bg-emerald-50 text-emerald-600 rounded-2xl text-xs font-bold hover:bg-emerald-100 transition-all border border-emerald-100">
-                    Test Endpoint
-                  </button>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                {['payment.success', 'payment.failed', 'refund.created', 'dispute.opened'].map(event => (
-                  <div key={event} className="flex items-center gap-3 p-4 bg-slate-50 rounded-xl border border-slate-100">
-                    <input type="checkbox" defaultChecked className="w-4 h-4 accent-emerald-500 rounded border-slate-300" />
-                    <span className="text-xs font-bold text-slate-600">{event}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </Card>
-        </div>
-
-        <div className="space-y-8">
-          <Card title="Quick Integration" subtitle="SDK Snippet (Node.js)">
-            <div className="space-y-6">
-              <div className="bg-[#0A0D14] rounded-2xl overflow-hidden">
-                <div className="px-5 py-3 bg-slate-800/50 flex justify-between items-center border-b border-slate-700">
-                   <div className="flex gap-1.5">
-                      <div className="w-2.5 h-2.5 rounded-full bg-red-500/30"></div>
-                      <div className="w-2.5 h-2.5 rounded-full bg-amber-500/30"></div>
-                      <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/30"></div>
-                   </div>
-                   <Code2 size={14} className="text-slate-500" />
-                </div>
-                <div className="p-6 font-mono text-[11px] leading-relaxed text-emerald-400 overflow-x-auto whitespace-pre">
-                  <code>{codeSnippet}</code>
-                </div>
-              </div>
-              <button className="w-full flex items-center justify-center gap-2 py-4 border-2 border-slate-100 rounded-2xl text-[10px] font-black uppercase tracking-widest text-slate-500 hover:bg-slate-50 transition-all">
-                View Documentation <ArrowRight size={14} />
-              </button>
-            </div>
-          </Card>
-
-          <Card title="Ecosystem Status">
-            <div className="space-y-6">
-               <div className="flex justify-between items-center">
-                  <div className="flex items-center gap-3">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500 pulsing-bar"></div>
-                    <span className="text-xs font-bold text-slate-700">Production API</span>
-                  </div>
-                  <span className="text-[10px] font-bold text-emerald-600 uppercase">Operational</span>
-               </div>
-               <div className="flex justify-between items-center">
-                  <div className="flex items-center gap-3">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                    <span className="text-xs font-bold text-slate-700">Webhooks</span>
-                  </div>
-                  <span className="text-[10px] font-bold text-emerald-600 uppercase">Operational</span>
-               </div>
-               <div className="h-px bg-slate-50"></div>
-               <div className="p-4 bg-slate-50 rounded-xl">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Avg. Latency</p>
-                  <p className="text-2xl font-bold text-slate-900 tabular-nums">14ms</p>
-               </div>
-            </div>
-          </Card>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// --- Sub-Components: Shared Modules ---
-
-const ChartWithToggle = ({ timePeriod, setTimePeriod, data }: { timePeriod: TimePeriod, setTimePeriod: (t: TimePeriod) => void, data: any[] }) => (
-  <Card title="Volume Distribution" subtitle={`Analysis by ${timePeriod.toLowerCase()}`} headerAction={
-    <div className="flex bg-slate-100 p-1 rounded-xl">
-      {(['DAYS', 'MONTHS', 'YEARS'] as TimePeriod[]).map(t => (
-        <button key={t} onClick={() => setTimePeriod(t)} className={`px-3 py-1.5 rounded-lg text-[9px] font-black tracking-widest uppercase transition-all ${timePeriod === t ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
-          {t[0]}
-        </button>
-      ))}
-    </div>
-  }>
-    <PieChart data={data} />
-  </Card>
-);
-
-// --- Sub-Components: Dashboard Views ---
-
-const MerchantDashboard = ({ txns, activeTab }: { txns: Transaction[], activeTab: string }) => {
-  const [timePeriod, setTimePeriod] = useState<TimePeriod>('DAYS');
-  const [isPayOpen, setIsPayOpen] = useState(false);
-  const merchantTxns = txns.filter(t => t.merchantId === 'M-ACME');
-  
-  const filteredTxns = useMemo(() => {
-    if (activeTab === 'payin') return merchantTxns.filter(t => t.type === 'PAYIN');
-    if (activeTab === 'payout') return merchantTxns.filter(t => t.type === 'PAYOUT');
-    return merchantTxns;
-  }, [merchantTxns, activeTab]);
-
-  const stats = useMemo(() => {
-    const payinTotal = merchantTxns.filter(t => t.type === 'PAYIN' && t.status === 'SUCCESS').reduce((acc, t) => acc + t.amount, 0);
-    const payoutTotal = merchantTxns.filter(t => t.type === 'PAYOUT' && t.status === 'SUCCESS').reduce((acc, t) => acc + t.amount, 0);
-    const processing = merchantTxns.filter(t => t.status === 'INITIATED').length;
-    const pending = merchantTxns.filter(t => t.status === 'PENDING').length;
-    return { payinTotal, payoutTotal, processing, pending };
-  }, [merchantTxns]);
-
-  const pieData = [
-    { label: 'Payin', value: stats.payinTotal, color: '#10b981' },
-    { label: 'Payout', value: stats.payoutTotal, color: '#3b82f6' },
-    { label: 'Reversed', value: 8500, color: '#8b5cf6' },
-    { label: 'Failed', value: 12000, color: '#ef4444' }
-  ];
-
-  return (
-    <div className="space-y-10">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-4xl font-bold text-slate-900 tracking-tight">
-            {activeTab === 'api_gen' ? 'Developer API Gateway' : 'Merchant Hub'}
-          </h1>
-          <p className="text-slate-500 text-lg mt-1 font-medium">
-            {activeTab === 'api_gen' ? 'Securely manage your integration endpoints' : 'Acme Corp • Digital Infrastructure'}
-          </p>
-        </div>
-        <div className="flex gap-4">
-          <button onClick={() => setIsPayOpen(true)} className="bg-emerald-600 text-white px-8 py-4 rounded-2xl font-bold shadow-xl flex items-center gap-2 hover:bg-emerald-700 transition-all">
-            <Plus size={20} /> New Payment
-          </button>
-          <button className="bg-[#0A0D14] text-white px-8 py-4 rounded-2xl font-bold shadow-2xl">Withdraw Funds</button>
-        </div>
-      </div>
-
-      {activeTab === 'api_gen' ? (
-        <APIGenerationView />
-      ) : (
-        <>
-          {(activeTab === 'analytics' || activeTab === 'ledger') && (
-            <>
-              <PaymentStats payin={stats.payinTotal} payout={stats.payoutTotal} processing={stats.processing} pending={stats.pending} />
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <div className="lg:col-span-2">
-                  <ChartWithToggle timePeriod={timePeriod} setTimePeriod={setTimePeriod} data={pieData} />
-                </div>
-                <Card title="Business Insight" subtitle="Real-time operations summary">
-                  <div className="space-y-8">
-                    <div className="flex justify-between items-center"><p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Active Links</p><span className="text-xl font-bold">14</span></div>
-                    <div className="flex justify-between items-center"><p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Conversion</p><span className="text-xl font-bold text-emerald-600">88.4%</span></div>
-                    <div className="p-5 bg-slate-900 rounded-[1.5rem] text-white">
-                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] mb-3">System Health</p>
-                        <div className="flex justify-between items-center text-xs font-bold"><span>API Latency</span><span className="text-emerald-400">14ms</span></div>
-                    </div>
-                  </div>
-                </Card>
-              </div>
-            </>
-          )}
-
-          {(activeTab === 'ledger' || activeTab === 'payin' || activeTab === 'payout') && (
-            <Card title="Global Ledger" subtitle={`Filter: ${activeTab.toUpperCase()}`}>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="text-left text-[11px] text-slate-400 uppercase tracking-widest border-b border-slate-50 font-bold">
-                      <th className="pb-6 px-4">Identifier</th>
-                      <th className="pb-6 px-4">Category</th>
-                      <th className="pb-6 px-4">Type</th>
-                      <th className="pb-6 px-4">Status</th>
-                      <th className="pb-6 px-4 text-right">Value</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {filteredTxns.map((t) => (
-                      <tr key={t.id} className="group hover:bg-slate-50 transition-colors cursor-pointer">
-                        <td className="py-6 px-4"><div className="font-bold text-slate-900">{t.id}</div><div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{t.timestamp}</div></td>
-                        <td className="py-6 px-4 font-bold text-slate-600 text-xs">{t.category}</td>
-                        <td className="py-6 px-4"><span className={`text-[10px] font-bold px-2 py-1 rounded-md border ${t.type === 'PAYIN' ? 'text-emerald-600 bg-emerald-50 border-emerald-100' : 'text-blue-600 bg-blue-50 border-blue-100'}`}>{t.type}</span></td>
-                        <td className="py-6 px-4"><StatusBadge status={t.status} /></td>
-                        <td className="py-6 px-4 text-right font-bold text-slate-900 tabular-nums text-xl">₹{t.amount.toFixed(2)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )}
-        </>
-      )}
-      <PaymentFlowModal isOpen={isPayOpen} onClose={() => setIsPayOpen(false)} />
-    </div>
-  );
-};
-
-const AdminDashboard = ({ txns, activeTab }: { txns: Transaction[], activeTab: string }) => {
-  const [timePeriod, setTimePeriod] = useState<TimePeriod>('DAYS');
-  const stats = useMemo(() => {
-    const payinTotal = txns.filter(t => t.type === 'PAYIN' && t.status === 'SUCCESS').reduce((acc, t) => acc + t.amount, 0);
-    const payoutTotal = txns.filter(t => t.type === 'PAYOUT' && t.status === 'SUCCESS').reduce((acc, t) => acc + t.amount, 0);
-    const processing = txns.filter(t => t.status === 'INITIATED').length;
-    const pending = txns.filter(t => t.status === 'PENDING').length;
-    return { payinTotal, payoutTotal, processing, pending };
-  }, [txns]);
-
-  const pieData = [
-    { label: 'Payin Vol', value: stats.payinTotal, color: '#10b981' },
-    { label: 'Payout Vol', value: stats.payoutTotal, color: '#3b82f6' },
-    { label: 'Idle Liquidity', value: 1250000, color: '#f59e0b' },
-    { label: 'Reconciliation', value: 450000, color: '#ef4444' }
-  ];
-
-  return (
-    <div className="space-y-10">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-4xl font-bold text-slate-900">Nexus Core</h1>
-          <p className="text-slate-500 text-lg mt-1 font-medium">Global Orchestration & Compliance Monitoring</p>
-        </div>
-        <div className="flex items-center gap-3 px-5 py-3 bg-emerald-50 rounded-full border border-emerald-100">
-           <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></div>
-           <span className="text-xs font-bold text-emerald-700 uppercase tracking-widest">Global Healthy</span>
-        </div>
-      </div>
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-         <OverviewCard 
-            title="Network Ecosystem" 
-            subtitle="Global merchant distribution" 
-            label="TOTAL MERCHANTS" 
-            value="84,201" 
-            icon={Store} 
-            colorClass="bg-white" 
-            iconBgClass="bg-slate-50"
-            isLight={true} 
-         />
-         <OverviewCard 
-            subtitle="System resource allocation" 
-            label="ACTIVE NODES" 
-            value="1,402" 
-            icon={Cpu} 
-            colorClass="bg-[#0F172A]" 
-            iconBgClass="bg-[#1E293B]" 
-         />
-      </div>
-
-      <PaymentStats payin={stats.payinTotal} payout={stats.payoutTotal} processing={stats.processing} pending={stats.pending} />
-      
-      {(activeTab === 'health' || activeTab === 'audit') && (
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-          <div className="lg:col-span-3"><ChartWithToggle timePeriod={timePeriod} setTimePeriod={setTimePeriod} data={pieData} /></div>
-          <Card title="Node Clusters">
-             <div className="space-y-6">
-                <div className="p-4 bg-slate-100 rounded-2xl text-slate-900 border border-slate-200">
-                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">Availability Zone</p>
-                   <div className="space-y-4">
-                      <div className="flex justify-between text-[11px] font-bold"><span>AWS-MUM-1</span><span className="text-emerald-600">99.9%</span></div>
-                      <div className="flex justify-between text-[11px] font-bold"><span>GCP-DEL-1</span><span className="text-emerald-600">100%</span></div>
-                      <div className="flex justify-between text-[11px] font-bold"><span>AZ-HYD-1</span><span className="text-emerald-600">99.8%</span></div>
-                   </div>
-                </div>
-                <button className="w-full py-4 border-2 border-slate-200 text-slate-400 rounded-xl text-[10px] font-black uppercase tracking-widest">Cluster Map</button>
-             </div>
-          </Card>
-        </div>
-      )}
-
-      {(activeTab === 'payin' || activeTab === 'payout' || activeTab === 'merchants') && (
-        <Card title="Managed Ecosystem" subtitle={`Focus: ${activeTab.toUpperCase()}`}>
-           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              {INITIAL_MERCHANTS.map(m => (
-                 <div key={m.id} className="p-6 border border-slate-100 rounded-3xl hover:border-emerald-500 transition-all bg-slate-50/50">
-                    <div className="flex items-center gap-4 mb-6">
-                       <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center font-bold text-emerald-600 shadow-sm">{m.name[0]}</div>
-                       <div><p className="text-sm font-bold text-slate-900">{m.name}</p><p className="text-[10px] text-slate-400 font-bold uppercase">{m.category}</p></div>
-                    </div>
-                    <div className="flex justify-between items-end"><div><p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Vol</p><p className="text-sm font-bold text-slate-900">{m.volume}</p></div><ArrowRight size={16} className="text-slate-300" /></div>
-                 </div>
-              ))}
-           </div>
-        </Card>
-      )}
-    </div>
-  );
-};
-
-// --- Main Application Shell ---
-
-const PaymentFlowModal = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) => {
-  const [step, setStep] = useState<'INPUT' | 'PROCESSING' | 'SUCCESS'>('INPUT');
-  const [amount, setAmount] = useState('');
-  const [merchantId, setMerchantId] = useState('M-APPLE');
 
   if (!isOpen) return null;
 
-  const handlePay = () => {
-    setStep('PROCESSING');
-    setTimeout(() => setStep('SUCCESS'), 1800);
-  };
-
-  const activeMerchant = INITIAL_MERCHANTS.find(m => m.id === merchantId);
-
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0A0D14]/60 backdrop-blur-md animate-in fade-in">
-      <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl overflow-hidden p-10 animate-in zoom-in-95">
-        {step === 'INPUT' && (
-          <>
-            <div className="flex justify-between items-center mb-10">
-              <h3 className="text-2xl font-bold text-slate-900">Initiate Transfer</h3>
-              <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full text-slate-400"><XCircle size={24}/></button>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6">
+      <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="p-8">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-900">Invite New Partner</h2>
+              <p className="text-sm text-slate-500 mt-1">Send invitation to onboard a new partner</p>
             </div>
-            <div className="space-y-8">
-              <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-3">Recipient</label>
-                <select value={merchantId} onChange={(e) => setMerchantId(e.target.value)} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-emerald-500 font-bold text-slate-900 text-sm appearance-none">
-                  {INITIAL_MERCHANTS.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Amount (INR)</label>
-                <div className="relative">
-                  <span className="absolute left-6 top-1/2 -translate-y-1/2 text-3xl font-bold text-slate-300">₹</span>
-                  <input autoFocus type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" className="w-full pl-12 pr-6 py-8 bg-slate-50 border-2 border-slate-100 rounded-3xl focus:outline-none focus:border-emerald-500 text-4xl font-bold tabular-nums text-slate-900" />
+            <button onClick={onClose} className="w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors"><XCircle size={20} className="text-slate-600" /></button>
+          </div>
+
+          {showSuccess && (
+            <div className="mb-6 p-6 bg-emerald-50 border-2 border-emerald-200 rounded-2xl">
+              <div className="flex items-start gap-3">
+                <CheckCircle2 className="text-emerald-600 flex-shrink-0 mt-1" size={24} />
+                <div className="flex-1">
+                  <h3 className="font-bold text-emerald-900 mb-2">Invitation Sent Successfully!</h3>
+                  <p className="text-sm text-emerald-700 mb-3">Partner will receive invitation email with this link:</p>
+                  <div className="flex gap-2">
+                    <input readOnly value={inviteLink} className="flex-1 px-4 py-3 bg-white border border-emerald-300 rounded-xl text-xs font-mono text-emerald-900" />
+                    <button onClick={handleCopyLink} className="px-4 py-3 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 transition-colors"><Copy size={16} /></button>
+                  </div>
                 </div>
               </div>
-              <button onClick={handlePay} disabled={!amount || parseFloat(amount) <= 0} className="w-full bg-[#0A0D14] text-white py-6 rounded-2xl font-bold text-xl hover:bg-slate-800 transition-all shadow-lg active:scale-95 disabled:opacity-50">
-                Send Secure Payment
-              </button>
             </div>
-          </>
-        )}
-        {step === 'PROCESSING' && (
-          <div className="py-16 text-center flex flex-col items-center">
-            <div className="w-16 h-16 border-4 border-slate-100 border-t-emerald-500 rounded-full animate-spin mb-10"></div>
-            <h3 className="text-3xl font-bold text-slate-900 mb-2 tracking-tight">Authenticating...</h3>
-            <p className="text-slate-500 font-medium">Communicating with Banking Layer v3</p>
-          </div>
-        )}
-        {step === 'SUCCESS' && (
-          <div className="py-10 text-center flex flex-col items-center">
-            <div className="w-24 h-24 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-8"><Check size={48} /></div>
-            <h3 className="text-3xl font-bold text-slate-900 mb-2">Funds Delivered</h3>
-            <p className="text-slate-400 text-sm font-mono mb-10 uppercase tracking-widest">ID: #TX-910232</p>
-            <div className="w-full p-6 bg-slate-50 rounded-2xl mb-10 text-left space-y-3 border border-slate-100">
-              <div className="flex justify-between text-xs font-bold uppercase tracking-wider text-slate-400"><span>Recipient</span><span className="text-slate-900">{activeMerchant?.name}</span></div>
-              <div className="flex justify-between text-xs font-bold uppercase tracking-wider text-slate-400"><span>Value</span><span className="text-slate-900 tabular-nums">₹{amount}</span></div>
+          )}
+
+          {error && (
+            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-2xl flex items-start gap-3">
+              <AlertCircle className="text-red-500 flex-shrink-0 mt-0.5" size={18} />
+              <p className="text-sm text-red-700 font-medium">{error}</p>
             </div>
-            <button onClick={onClose} className="w-full bg-emerald-600 text-white py-5 rounded-2xl font-bold hover:bg-emerald-700 transition-all text-lg">Close Dashboard</button>
-          </div>
-        )}
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-2">Business Name *</label>
+              <input type="text" value={formData.businessName} onChange={(e) => setFormData({ ...formData, businessName: e.target.value })} placeholder="e.g., Gaming Pro" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-900" disabled={loading || showSuccess} required />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-2">Email Address *</label>
+              <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} placeholder="partner@gamingpro.com" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-900" disabled={loading || showSuccess} required />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-2">Phone Number</label>
+              <input type="tel" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} placeholder="9876543210" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-900" disabled={loading || showSuccess} />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-2">Business Type</label>
+              <select value={formData.businessType} onChange={(e) => setFormData({ ...formData, businessType: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-900" disabled={loading || showSuccess}>
+                <option value="">Select type...</option>
+                <option value="Gaming">Gaming</option>
+                <option value="E-commerce">E-commerce</option>
+                <option value="EdTech">EdTech</option>
+                <option value="SaaS">SaaS</option>
+                <option value="Marketplace">Marketplace</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+
+            {!showSuccess && (
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={onClose} className="flex-1 px-6 py-4 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm hover:bg-slate-200 transition-colors" disabled={loading}>Cancel</button>
+                <button type="submit" disabled={loading} className="flex-1 px-6 py-4 bg-[#0A0D14] text-white rounded-xl font-bold text-sm hover:bg-slate-800 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
+                  {loading ? (<><RefreshCw className="animate-spin" size={16} />Sending...</>) : (<><Mail size={16} />Send Invitation</>)}
+                </button>
+              </div>
+            )}
+          </form>
+        </div>
       </div>
     </div>
   );
 };
 
-const AuthScreen = ({ onLogin }: { onLogin: (role: Role) => void }) => {
-  const [view, setView] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
+// --- Partner Registration (Onboarding) Component ---
+interface PartnerRegistrationProps {
+  token: string;
+  onComplete: () => void;
+}
+
+const PartnerRegistration = ({ token, onComplete }: PartnerRegistrationProps) => {
+  const [verifying, setVerifying] = useState(true);
+  const [partnerData, setPartnerData] = useState<any>(null);
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [phone, setPhone] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  useEffect(() => {
+    verifyToken();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  const verifyToken = async () => {
+    setVerifying(true);
+    setError('');
+    try {
+      console.log('Verifying invite token:', token);
+      const response = await verifyInviteToken(token);
+      if (response.success && response.data) {
+        setPartnerData(response.data);
+        setPhone(response.data.phone || '');
+        console.log('Invite verified:', response.data);
+      } else {
+        throw new Error(response.message || 'Invalid response from server');
+      }
+    } catch (err: any) {
+      console.error('Token verification error:', err);
+      setError(err.response?.data?._clientMessage || err.response?.data?.message || 'Invalid or expired invitation link');
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!password || !confirmPassword) {
+      setError('Please enter password and confirm it');
+      return;
+    }
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters long');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    try {
+      console.log('Completing registration...');
+      const response = await completeRegistration({ token, password, phone: phone || undefined });
+      if (response.success) {
+        console.log('Registration complete:', response.data);
+        setSuccess(true);
+        // show inline success, then navigate back to login
+        setTimeout(() => onComplete(), 1200);
+      } else {
+        throw new Error(response.message || 'Registration failed');
+      }
+    } catch (err: any) {
+      console.error('Registration error:', err);
+      const apiErr = err?.response?.data?.error || err?.response?.data;
+      if (apiErr?.details && Array.isArray(apiErr.details)) {
+        // details from Zod validation → array of { field, message }
+        setError(apiErr.details.map((d: any) => (d.field ? `${d.field}: ${d.message}` : d.message)).join('; '));
+      } else {
+        setError(apiErr?.message || err.response?.data?._clientMessage || 'Registration failed. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (verifying) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 flex items-center justify-center p-6">
+        <div className="text-center">
+          <RefreshCw className="animate-spin mx-auto mb-4 text-emerald-600" size={48} />
+          <p className="text-lg font-semibold text-slate-700">Verifying invitation...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error && !partnerData) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl p-8">
+          <div className="text-center">
+            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <XCircle className="text-red-600" size={32} />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-900 mb-2">Invalid Invitation</h2>
+            <p className="text-slate-600 mb-6">{error}</p>
+            <button onClick={() => (window.location.href = '/')} className="px-6 py-3 bg-[#0A0D14] text-white rounded-xl font-bold text-sm hover:bg-slate-800 transition-colors">
+              Go to Login
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 flex items-center justify-center p-6">
+      <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-2 gap-0 bg-white rounded-3xl shadow-2xl overflow-hidden">
+        <div className="bg-gradient-to-br from-[#0A0D14] to-slate-800 p-16 text-white flex flex-col justify-between relative overflow-hidden">
+          <div className="relative">
+            <div className="w-14 h-14 bg-emerald-400 rounded-2xl flex items-center justify-center mb-6 shadow-xl">
+              <ShieldCheck className="text-[#0A0D14]" size={28} strokeWidth={2.5} />
+            </div>
+            <h1 className="text-5xl font-bold mb-4 leading-tight">Welcome to<br />NexusPay</h1>
+            <p className="text-2xl text-slate-300 font-light">Complete your<br /><span className="text-emerald-400 font-semibold">registration.</span></p>
+          </div>
+
+          <div className="relative space-y-4">
+            <div className="flex items-center gap-3 text-slate-300">
+              <CheckCircle2 size={20} className="text-emerald-400" />
+              <span className="text-sm font-medium">Secure Payment Processing</span>
+            </div>
+            <div className="flex items-center gap-3 text-slate-300">
+              <CheckCircle2 size={20} className="text-emerald-400" />
+              <span className="text-sm font-medium">Instant Settlements</span>
+            </div>
+            <div className="flex items-center gap-3 text-slate-300">
+              <CheckCircle2 size={20} className="text-emerald-400" />
+              <span className="text-sm font-medium">24/7 API Access</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-16 flex flex-col justify-center">
+          <div className="mb-10">
+            <h2 className="text-3xl font-bold text-slate-900 mb-2">Complete Registration</h2>
+            <p className="text-slate-500 font-medium">Set up your partner account</p>
+          </div>
+
+          <div className="mb-8 p-6 bg-emerald-50 border border-emerald-200 rounded-2xl">
+            {success ? (
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center"><Check className="text-emerald-600" /></div>
+                <div>
+                  <h3 className="text-sm font-bold text-emerald-900 mb-1">Registration Successful</h3>
+                  <p className="text-sm text-emerald-700">Your account is ready. Redirecting to login…</p>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <h3 className="text-sm font-bold text-emerald-900 mb-3">Business Information</h3>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Store size={16} className="text-emerald-600" />
+                    <span className="text-sm font-semibold text-slate-900">{partnerData?.businessName}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Mail size={16} className="text-emerald-600" />
+                    <span className="text-sm text-slate-600">{partnerData?.email}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-2xl flex items-start gap-3">
+              <AlertCircle className="text-red-500 flex-shrink-0 mt-0.5" size={18} />
+              <p className="text-sm text-red-700 font-medium">{error}</p>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Create Password *</label>
+              <div className="relative">
+                <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Minimum 8 characters" className="w-full px-6 pr-12 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-semibold text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-50 transition-all" disabled={loading} required />
+                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Confirm Password *</label>
+              <div className="relative">
+                <input type={showConfirmPassword ? 'text' : 'password'} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Re-enter password" className="w-full px-6 pr-12 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-semibold text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-50 transition-all" disabled={loading} required />
+                <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">{showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Phone Number (Optional)</label>
+              <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="9876543210" className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-semibold text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-50 transition-all" disabled={loading} />
+            </div>
+
+            <button type="submit" disabled={loading} className="w-full bg-[#0A0D14] text-white font-bold py-5 rounded-2xl text-sm hover:bg-slate-800 transition-all shadow-xl hover:shadow-2xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3">{loading ? (<><RefreshCw className="animate-spin" size={18} />Setting up account...</>) : (<>Complete Registration<ArrowRight size={18} /></>)}</button>
+          </form>
+
+          <p className="mt-8 text-center text-xs text-slate-400 font-medium">Already have an account? <span onClick={() => (window.location.href = '/')} className="text-emerald-600 font-bold cursor-pointer hover:underline">Login here</span></p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const LoginView = ({ onLogin }: { onLogin: (role: Role) => void }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [role, setRole] = useState<Role>('Merchant');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleAuth = (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    setTimeout(() => {
-      let role: Role = 'Admin';
-      if (email.toLowerCase().includes('merchant')) role = 'Merchant';
+  const handleLogin = async () => {
+    if (!email || !password) {
+      setError('Please enter email and password');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      console.log('Attempting login...', { email, role });
+      let response;
+      if (role === 'Admin') {
+        response = await adminLogin({ email, password });
+      } else {
+        response = await partnerLogin({ email, password });
+      }
+
+      console.log('Login response:', response);
+
+      if (!response.success || !response.data?.token) {
+        throw new Error(response.message || 'Invalid response from server');
+      }
+
+      storage.setToken(response.data.token);
+      storage.setRole(role);
+      // persist partner profile locally for UI seeding
+      if (role !== 'Admin' && response.data.partner) {
+        try {
+          storage.setPartnerProfile(response.data.partner);
+        } catch (e) {
+          console.warn('Failed to persist partner profile', e);
+        }
+      }
+
       onLogin(role);
-      setIsLoading(false);
-    }, 1200);
+    } catch (err: any) {
+      console.error('Login error:', err);
+      let errorMessage = 'Login failed. Please try again.';
+      const resp = err?.response?.data || {};
+      if (resp._clientMessage) errorMessage = resp._clientMessage;
+      else if (resp.message) errorMessage = resp.message;
+      else if (resp.error?.message) errorMessage = resp.error.message;
+      else if (err?.message) errorMessage = err.message;
+
+      const retry = resp._retryAfter || resp.error?.details?.retryAfter || err?.response?.headers?.['retry-after'];
+      if (retry) {
+        errorMessage += ` (retry after ${retry}s)`;
+      }
+
+      setError(errorMessage);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -758,24 +475,81 @@ const AuthScreen = ({ onLogin }: { onLogin: (role: Role) => void }) => {
         </div>
         <div className="flex-1 p-16 flex flex-col justify-center">
           <div className="max-w-md mx-auto w-full">
-            <h2 className="text-4xl font-bold text-slate-900 mb-2">{view === 'LOGIN' ? 'Welcome Back' : 'Create Account'}</h2>
-            <p className="text-slate-500 mb-12 font-medium">{view === 'LOGIN' ? 'Access your internal gateway.' : 'Join our financial ecosystem.'}</p>
-            <form onSubmit={handleAuth} className="space-y-6">
-              <div>
-                <label className="block text-xs font-bold text-slate-400 uppercase tracking-[0.15em] mb-3">Gateway Access</label>
-                <input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@nexus.com or merchant@acme.com" className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 transition-all text-slate-900 font-semibold" />
+            <h2 className="text-4xl font-bold text-slate-900 mb-2">Welcome Back</h2>
+            <p className="text-slate-500 mb-6 font-medium">Access your internal gateway.</p>
+
+            <div className="mb-8">
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Gateway Access</label>
+              <div className="grid grid-cols-2 gap-3">
+                {(['Merchant', 'Admin'] as Role[]).map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => setRole(r)}
+                    className={`px-6 py-4 rounded-2xl font-bold text-sm transition-all border-2 ${
+                      role === r
+                        ? 'bg-[#0A0D14] text-white border-[#0A0D14] shadow-lg'
+                        : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    {r}
+                  </button>
+                ))}
               </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-400 uppercase tracking-[0.15em] mb-3">Security Passcode</label>
-                <input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 transition-all text-slate-900 font-semibold" />
+            </div>
+
+            {error && (
+              <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-2xl flex items-start gap-3">
+                <AlertCircle className="text-red-500 flex-shrink-0 mt-0.5" size={18} />
+                <p className="text-sm text-red-700 font-medium">{error}</p>
               </div>
-              <button type="submit" disabled={isLoading} className="w-full bg-[#0A0D14] text-white py-5 rounded-2xl font-bold text-lg hover:bg-slate-800 shadow-xl transition-all active:scale-[0.98] flex items-center justify-center gap-3">
-                {isLoading ? <RefreshCw className="animate-spin" size={20} /> : view === 'LOGIN' ? 'Authorize Protocol' : 'Join Platform'}
-              </button>
-            </form>
+            )}
+
+            <div className="mb-6">
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Gateway Access</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="admin@paycher.com or merchant@acme.com"
+                className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-semibold text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-50 transition-all"
+                disabled={loading}
+              />
+            </div>
+
+            <div className="mb-8">
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Security Passcode</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-semibold text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-50 transition-all"
+                disabled={loading}
+                onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
+              />
+            </div>
+
+            <button
+              onClick={handleLogin}
+              disabled={loading}
+              className="w-full bg-[#0A0D14] text-white py-5 rounded-2xl font-bold text-lg hover:bg-slate-800 shadow-xl transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3"
+            >
+              {loading ? (
+                <>
+                  <RefreshCw className="animate-spin" size={20} />
+                  Authenticating...
+                </>
+              ) : (
+                <>
+                  Authorize Protocol
+                  <ArrowRight size={20} />
+                </>
+              )}
+            </button>
+
             <div className="mt-10 flex flex-col items-center gap-4">
-              <button onClick={() => setView(view === 'LOGIN' ? 'REGISTER' : 'LOGIN')} className="text-sm font-bold text-emerald-600 hover:text-emerald-700 transition-colors">
-                {view === 'LOGIN' ? "Don't have an account? Register" : "Already have an account? Sign In"}
+              <button onClick={() => { /* placeholder for register */ }} className="text-sm font-bold text-emerald-600 hover:text-emerald-700 transition-colors">
+                Don't have an account? Register
               </button>
             </div>
           </div>
@@ -788,17 +562,19 @@ const AuthScreen = ({ onLogin }: { onLogin: (role: Role) => void }) => {
 const Sidebar = ({ role, activeTab, onTabChange, onLogout }: { role: Role, activeTab: string, onTabChange: (id: string) => void, onLogout: () => void }) => {
   const tabs = role === 'Merchant'
     ? [
-        { id: 'analytics', icon: LayoutDashboard, label: 'Business' }, 
-        { id: 'payin', icon: Download, label: 'Payin' }, 
-        { id: 'payout', icon: Upload, label: 'Payout' }, 
-        { id: 'ledger', icon: RefreshCw, label: 'Ledger' }, 
-        { id: 'api_gen', icon: Key, label: 'API Gateway' }, 
+        { id: 'analytics', icon: LayoutDashboard, label: 'Business' },
+        { id: 'wallet', icon: DollarSign, label: 'Wallet' },
+        { id: 'payin', icon: Download, label: 'Payin' },
+        { id: 'payout', icon: Upload, label: 'Payout' },
+        { id: 'ledger', icon: RefreshCw, label: 'Ledger' },
+        { id: 'api_gen', icon: Key, label: 'API Gateway' },
         { id: 'settings', icon: Settings, label: 'Settings' }
       ]
     : [
-        { id: 'health', icon: Activity, label: 'Control' }, 
-        { id: 'payin', icon: Download, label: 'Payin' }, 
-        { id: 'payout', icon: Upload, label: 'Payout' }, 
+        { id: 'health', icon: Activity, label: 'Control' },
+        { id: 'wallet', icon: DollarSign, label: 'Wallet' },
+        { id: 'payin', icon: Download, label: 'Payin' },
+        { id: 'payout', icon: Upload, label: 'Payout' },
         { id: 'merchants', icon: Store, label: 'Merchants' }
       ];
 
@@ -857,7 +633,15 @@ const Header = ({ title, role, onLogout }: { title: string, role: Role, onLogout
 
   return (
     <header className="h-24 bg-white/80 backdrop-blur-xl border-b border-slate-200 sticky top-0 z-50 flex items-center justify-between px-12">
-      <h2 className="text-2xl font-bold text-slate-900 tracking-tight">{title}</h2>
+      <div className="flex items-center gap-4">
+        <h2 className="text-2xl font-bold text-slate-900 tracking-tight">{title}</h2>
+        {role === 'Admin' && (
+          <div className="flex items-center gap-3 px-5 py-2 bg-emerald-50 rounded-full border border-emerald-100">
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></div>
+            <span className="text-xs font-bold text-emerald-700 uppercase tracking-widest">Global Healthy</span>
+          </div>
+        )}
+      </div>
       <div className="flex items-center gap-8">
         <div className="relative group hidden md:block">
           <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
@@ -902,32 +686,132 @@ const Header = ({ title, role, onLogout }: { title: string, role: Role, onLogout
   );
 };
 
+class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError: boolean; error: string }> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: '' };
+  }
+  static getDerivedStateFromError(err: any) {
+    return { hasError: true, error: err?.message || String(err) };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 p-8">
+          <div className="bg-white border border-red-200 rounded-3xl p-10 max-w-lg w-full text-center shadow-xl">
+            <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-5">
+              <AlertCircle className="text-red-500" size={28} />
+            </div>
+            <h2 className="text-xl font-bold text-slate-900 mb-2">Something went wrong</h2>
+            <p className="text-sm text-slate-500 mb-6 font-mono bg-slate-50 p-3 rounded-xl text-left break-words">{this.state.error}</p>
+            <button
+              onClick={() => { this.setState({ hasError: false, error: '' }); window.location.reload(); }}
+              className="px-6 py-3 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-slate-700 transition-colors"
+            >
+              Reload page
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const App = () => {
-  const [role, setRole] = useState<Role | null>(null);
+  const getRouteFromUrl = () => {
+    const path = window.location.pathname;
+    const match = path.match(/^\/onboarding\/invite\/([A-Za-z0-9-]+)$/);
+    if (match) return { type: 'onboarding' as const, token: match[1] };
+    return { type: 'main' as const };
+  };
+
+  const [currentRoute, setCurrentRoute] = useState(getRouteFromUrl());
+
+  useEffect(() => {
+    const handlePopState = () => setCurrentRoute(getRouteFromUrl());
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+  const [role, setRole] = useState<Role | null>(() => storage.getRole());
   const [activeTab, setActiveTab] = useState('');
+  
+  const [showInviteModal, setShowInviteModal] = useState(false);
 
   useEffect(() => {
     if (role === 'Merchant') setActiveTab('analytics');
     else if (role === 'Admin') setActiveTab('health');
   }, [role]);
 
+  // On mount, ensure role is derived from persisted storage when token exists
+  useEffect(() => {
+    const token = storage.getToken();
+    const persistedRole = storage.getRole();
+    if (token && persistedRole && !role) {
+      setRole(persistedRole);
+    }
+    // if token exists but no role, clear token
+    if (token && !persistedRole) {
+      storage.removeToken();
+    }
+    // ensure active tab matches path (support /admin and /partner paths)
+    const path = window.location.pathname;
+    if (path.startsWith('/admin')) {
+      setRole('Admin');
+      setActiveTab('health');
+    } else if (path.startsWith('/partner')) {
+      setRole('Merchant');
+      setActiveTab('analytics');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // Test backend connection on app load
+    healthCheck()
+      .then(() => console.log('✅ Backend connected'))
+      .catch((err) => console.error('❌ Backend connection failed:', err));
+  }, []);
+
+  
+
+  const handleLogout = () => {
+    storage.clear();
+    setRole(null);
+    setActiveTab('');
+  };
+
+  // Handle onboarding route (public)
+  if ((currentRoute as any).type === 'onboarding' && (currentRoute as any).token) {
+    return (
+      <PartnerRegistration
+        token={(currentRoute as any).token}
+        onComplete={() => {
+          window.history.pushState({}, '', '/');
+          setCurrentRoute({ type: 'main' });
+        }}
+      />
+    );
+  }
+
   if (!role) {
-    return <AuthScreen onLogin={setRole} />;
+    return <LoginView onLogin={setRole} />;
   }
 
   return (
     <div className="flex min-h-screen bg-slate-50 font-poppins selection:bg-emerald-100 selection:text-emerald-900 antialiased">
-      <Sidebar role={role} activeTab={activeTab} onTabChange={setActiveTab} onLogout={() => setRole(null)} />
+      <Sidebar role={role} activeTab={activeTab} onTabChange={setActiveTab} onLogout={handleLogout} />
       <div className="flex-1 flex flex-col">
-        <Header title={role === 'Merchant' ? 'Merchant Ecosystem' : 'Infrastructure Control'} role={role} onLogout={() => setRole(null)} />
+        <Header title={role === 'Merchant' ? 'Merchant Ecosystem' : 'Infrastructure Control'} role={role} onLogout={handleLogout} />
         <main className="p-12 flex-1 overflow-y-auto">
-          {role === 'Merchant' && <MerchantDashboard txns={ALL_TRANSACTIONS} activeTab={activeTab} />}
-          {role === 'Admin' && <AdminDashboard txns={ALL_TRANSACTIONS} activeTab={activeTab} />}
+          {role === 'Merchant' && <MerchantDashboardPage activeTab={activeTab} />}
+          {role === 'Admin' && <AdminDashboardPage activeTab={activeTab} onInvite={() => setShowInviteModal(true)} />}
         </main>
       </div>
+      <InvitePartnerModal isOpen={showInviteModal} onClose={() => setShowInviteModal(false)} onSuccess={() => { window.dispatchEvent(new Event('partners:refetch')); }} />
     </div>
   );
 };
 
 const root = createRoot(document.getElementById('root')!);
-root.render(<App />);
+root.render(<ErrorBoundary><App /></ErrorBoundary>);
